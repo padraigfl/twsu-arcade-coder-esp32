@@ -15,6 +15,25 @@ const uint8_t YELLOW= 0b001;
 const uint8_t PURPLE= 0b100;
 const uint8_t CYAN  = 0b010;
 
+uint8_t oneRed[] = {
+  0b11111111,
+  0b01111111,
+  0b11111111,
+  255, 255, 255, 255, 255, 255
+};
+uint8_t oneWhite[] = {
+  0b01111111,
+  0b01111111,
+  0b01111111,
+  255, 255, 255, 255, 255, 255
+};
+uint8_t oneBlack[] = {
+  0b1000000,
+  0b1000000,
+  0b1000000,
+  0,0,0,0,0,0
+};
+
 uint8_t whiteRed[] = {
   0b01010101,
   0b00000000,
@@ -121,7 +140,7 @@ const int unknownPins[] = {
 }; // 26 and 27 read as 4095 (possibly the accelerometer?), pin 25 to ground triggers reset in stock firmware
 const int possiblyUnused[] = {12, 13, 14, 25 }; // no traces observed, potentially usable
 const int inputOnly[] = { 34, 33, 35, 36, 39 }; // all (plus 32) appear to be connected, occasional drops to 2600
-const int matrixInputs[] = { 32, 33, 34, 35, 36, 39 }; // all register values when pressed
+const int matrixInputs[] = { 39, 36, 35, 34, 33, 32 }; // all register values when pressed
 
 // utility values
 const int intSize = sizeof(int);
@@ -181,10 +200,116 @@ void loop() {
   if (display) {
     refreshMatrix();
   }
-  if (useMatrixInputs) {
+  if (useMatrixInputs && icn % 8 == 2 ) {
     buttonRead();
   }
 
+  if (autoSwap) { autoModeSwap(); }
+  homeButtonAction();
+  loopCount++;
+}
+
+/* 
+  Can read if a button is pressed on a given multiplexed group
+  Can somewhat gauge if multiple are pressed (higher analog values for more buttons)
+  Cannot determine which of the 24 buttons has been pressed
+*/
+void buttonRead() { // button matrix values seem to be
+  int inputsCount = sizeof(matrixInputs) / intSize;
+  bool pinPress[inputsCount] = { false };
+  digitalWrite(HC595_LAT, LOW); // needs to be low to get reliable values
+  delayMicroseconds(50);
+  bool pressPause = false; // visual feedback that at least one button has been held down
+  for (int i = 0; i < inputsCount; i++) {
+    uint16_t btnVal = analogRead(matrixInputs[i]);
+
+    for (int k = 0; k < 9; k++) {
+      btnVal += analogRead(matrixInputs[i]);
+      delayMicroseconds(10);
+    }
+    if (btnVal > 100) {
+      pinPress[i] = true;
+      buttonRangeCounter[i]++;
+    }
+
+    btnVal = static_cast<int>(std::round(btnVal *0.1));
+
+    // OE low and iterating through these actions seems to observe whether a button has been pressed on IC channels 0 and 7
+    digitalWrite(HC595_OE, LOW); // Enable HC595 outputs (active low)
+    if (buttonRangeCounter[i] > 50) {
+      for (int ic = 0; ic < 8; ic++) {
+        setICN2012Column(ic);
+        for (int c = 0; c < 8; c++) {
+          digitalWrite(HC595_DATA, (0b01111111 >> i & 0b11111111));
+          for (int clk = 0; clk < 8; clk++) {
+            digitalWrite(HC595_CLK, HIGH);
+            digitalWrite(HC595_CLK, LOW);
+          }
+          int nextBtnVal = analogRead(matrixInputs[i]);
+          delay(2);
+          if (nextBtnVal > 0) {
+            Serial.printf("index: %d, icn: %d, btnVal: %04u\n", c, ic, nextBtnVal);
+          }
+        }
+        buttonRangeCounter[i] = 0;
+        int pixelRange1 = (int) (5 - i) * 12;
+        int pixelRange2 = pixelRange1 + 72;
+        pressPause = true;
+      }
+      // Serial.printf(
+      //   "\nA button in multiplex group %d (%d - %d, %d - %d ) has been pressed\n",
+      //   6 - i,
+      //   pixelRange1, pixelRange1 + 12,
+      //   pixelRange2, pixelRange2 + 12
+      // );
+    }
+  }
+  if (pressPause) {
+    delay(1000);  Serial.printf("  %d:  ", (icn % 6) + 1);
+  Serial.println();
+  }
+  digitalWrite(HC595_LAT, HIGH); // needs to be low to get reliable values
+
+  // return pinPress;
+}
+
+void refreshMatrix() {
+  // iterates through multiplexed rows
+  setICN2012Column(icn++);
+  hc595Write(oneRed, 9);
+}
+
+// TODO replace function with RGB custom shift register function so full matrix can be animated
+void hc595Write(uint8_t data[], int num_chips) { // Takes an array of bytes
+  digitalWrite(HC595_OE, LOW); // Enable HC595 outputs (active low)
+  digitalWrite(HC595_LAT, LOW); // Prepare for data transfer
+  for (int i = 0; i < num_chips; i++) { // Iterate through all the chips
+    shiftOut(HC595_DATA, HC595_CLK, MSBFIRST, data[i]); // Send data for each chip
+  }
+  delayMicroseconds(2);
+  digitalWrite(HC595_LAT, HIGH); // Latch the data after all bytes are sent
+  digitalWrite(HC595_OE, HIGH); // Disable HC595 outputs to prevent ghosting
+}
+
+
+// TODO investigate ditching all LOW and all HIGH states
+void setICN2012Column(int val) {
+  // digitalWrite(E2, HIGH);
+  // initial PIN values
+  uint8_t a0 = LOW; uint8_t a1 = LOW; uint8_t a2 = LOW;
+  int stage = (val % 8);
+  if (stage == 1)      { a1 = HIGH; a2 = HIGH; } // bottom row
+  else if (stage == 2) { a0 = HIGH; } // 2: second from bottom?
+  else if (stage == 3) { a2 = HIGH; } // 3: 3rd from bottom
+  else if (stage == 4) { a0 = HIGH; a2 = HIGH; } // 4: 3rd from top
+  else if (stage == 5) { a0 = HIGH; a1 = HIGH; } // 5: second from top
+  else if (stage == 6) { a1 = HIGH; }  // 6: top row
+  else if (stage == 7) { a0 = HIGH; a1 = HIGH; a2 = HIGH; }
+  digitalWrite(ICN_A0, a0); digitalWrite(ICN_A1, a1); digitalWrite(ICN_A2, a2);
+  // digitalWrite(E2, LOW);
+}
+
+void autoModeSwap() {
   // if (autoSwap && loopCount % 1000 == 0) {
   //   if (display && useMatrixInputs) {
   //     display = true;
@@ -200,88 +325,6 @@ void loop() {
   //   }
   //   delay(1000);
   // }
-
-  // homeButtonAction();
-  loopCount++;
-}
-
-/* 
-  Can read if a button is pressed on a given multiplexed group
-  Can somewhat gauge if multiple are pressed (higher analog values for more buttons)
-  Cannot determine which of the 24 buttons has been pressed
-*/
-void buttonRead() { // button matrix values seem to be
-  int inputsCount = sizeof(matrixInputs) / intSize;
-  bool pinPress[inputsCount] = { false };
-  digitalWrite(HC595_LAT, LOW); // needs to be low to get reliable values
-  bool pressPause = false; // visual feedback that at least one button has been held down
-  for (int i = 0; i < inputsCount; i++) {
-    uint16_t btnVal = analogRead(matrixInputs[i]);
-    // if a button is pressed in a multiplexed grouping the corresponding pin will have a different val
-    Serial.printf("%02d:%04u,", matrixInputs[i], btnVal);
-    if (btnVal > 100) {
-      pinPress[i] = true;
-      buttonRangeCounter[i]++;
-    }
-    if (buttonRangeCounter[i] > 50) {
-      buttonRangeCounter[i] = 0;
-      int pixelRange1 = (int) (5 - i) * 12;
-      int pixelRange2 = pixelRange1 + 72;
-      pressPause = true;
-      Serial.printf(
-        "A button in multiplex group %d (%d - %d, %d - %d ) has been pressed\n",
-        6 - i,
-        pixelRange1, pixelRange1 + 12,
-        pixelRange2, pixelRange2 + 12
-      );
-    }
-  }
-  if (pressPause) {
-    delay(1000);
-  }
-  digitalWrite(HC595_LAT, HIGH); // needs to be low to get reliable values
-  Serial.printf("  %d:  ", (icn % 6) + 1);
-  Serial.println();
-  // return pinPress;
-}
-
-void refreshMatrix() {
-  // iterates through multiplexed rows
-  setICN2012Column(icn++);
-  hc595Write(redWhite, 9);
-}
-
-// TODO replace function with RGB custom shift register function so full matrix can be animated
-void hc595Write(byte data[], int num_chips) { // Takes an array of bytes
-  digitalWrite(HC595_OE, LOW); // Enable HC595 outputs (active low)
-  digitalWrite(HC595_LAT, LOW); // Prepare for data transfer
-  for (int i = 0; i < num_chips; i++) { // Iterate through all the chips
-    shiftOut(HC595_DATA, HC595_CLK, MSBFIRST, data[i]); // Send data for each chip
-  }
-  delayMicroseconds(2);
-  digitalWrite(HC595_LAT, HIGH); // Latch the data after all bytes are sent
-  digitalWrite(HC595_OE, HIGH); // Disable HC595 outputs to prevent ghosting
-}
-
-void setICN2012Column(int val) {
-  // digitalWrite(E2, HIGH);
- // delayMicroseconds(10);
-
-  // initial PIN values
-  uint8_t a0 = LOW; uint8_t a1 = LOW; uint8_t a2 = LOW;
-
-  // TODO investigate ditching all LOW and all HIGH states
-  int stage = (val % 8);
-  if (stage == 1)      { a1 = HIGH; a2 = HIGH; } // bottom row
-  else if (stage == 2) { a0 = HIGH; } // 2: second from bottom?
-  else if (stage == 3) { a2 = HIGH; } // 3: 3rd from bottom
-  else if (stage == 4) { a0 = HIGH; a2 = HIGH; } // 4: 3rd from top
-  else if (stage == 5) { a0 = HIGH; a1 = HIGH; } // 5: second from top
-  else if (stage == 6) { a1 = HIGH; }  // 6: top row
-  else if (stage == 7) { a0 = HIGH; a1 = HIGH; a2 = HIGH; }
-  digitalWrite(ICN_A0, a0); digitalWrite(ICN_A1, a1); digitalWrite(ICN_A2, a2);
-  // delayMicroseconds(10);
-  // digitalWrite(E2, LOW);
 }
 
 // hijacks code to verify home button is being pressed, needs a debouncer for being released
