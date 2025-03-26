@@ -4,6 +4,11 @@ An open source repository for adding functionality to Tech Will Save Us's ESP32-
 
 I am in no way a hardware person so please assume that I could be wrong about many things here. Am very happy to talk about it and help whoever out if possible. If you'd like to assist me I'd be very grateful to receive a couple more of these devices to test with and make projects with.
 
+## Community
+
+Following [a very generous sharing of dozens of Arcade Coders](https://www.reddit.com/r/LinusTechTips/comments/1jgk9cr/how_can_i_stop_all_of_this_from_becoming_ewaste/), there is now a community of developers working on developing software for this board on [Discord](https://discord.gg/QWCUWKAqts) (if this URL does not work please message someone in the reddit thread who has joined).
+If you join the community please make an effort to share your discoveries in a public space for future preservation.
+
 ## How it works
 
 - 9 daisy chained HC595 chips are daisy-chained and used to control 24 RGB LEDs (two of the twelve rows) from 3 ESP32 pins
